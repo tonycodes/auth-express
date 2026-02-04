@@ -168,6 +168,11 @@ export function createAuthMiddleware(config) {
                     res.status(401).json({ error: err.error || 'Token exchange failed' });
                     return;
                 }
+                // Forward Set-Cookie headers (refresh token) from auth service
+                const setCookies = tokenRes.headers.getSetCookie?.() || [];
+                for (const cookie of setCookies) {
+                    res.append('Set-Cookie', cookie);
+                }
                 const tokens = (await tokenRes.json());
                 res.json({
                     access_token: tokens.access_token,

@@ -237,6 +237,12 @@ export function createAuthMiddleware(config: AuthConfig) {
           return;
         }
 
+        // Forward Set-Cookie headers (refresh token) from auth service
+        const setCookies = tokenRes.headers.getSetCookie?.() || [];
+        for (const cookie of setCookies) {
+          res.append('Set-Cookie', cookie);
+        }
+
         const tokens = (await tokenRes.json()) as {
           access_token: string;
           token_type: string;
