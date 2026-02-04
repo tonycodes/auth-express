@@ -1,0 +1,28 @@
+{
+  "name": "@tonycodes/auth-express",
+  "version": "1.0.0",
+  "description": "Express middleware for Tony Auth service",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "jose": "^6.0.11"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0 || >=5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "typescript": "^5.3.2"
+  }
+}
