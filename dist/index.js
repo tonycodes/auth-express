@@ -168,12 +168,18 @@ export function createAuthMiddleware(config) {
                     res.status(401).json({ error: err.error || 'Token exchange failed' });
                     return;
                 }
-                // Forward Set-Cookie headers (refresh token) from auth service
-                const setCookies = tokenRes.headers.getSetCookie?.() || [];
-                for (const cookie of setCookies) {
-                    res.append('Set-Cookie', cookie);
-                }
                 const tokens = (await tokenRes.json());
+                // Set refresh token as httpOnly cookie on the shared domain
+                if (tokens.refresh_token) {
+                    res.cookie('refresh_token', tokens.refresh_token, {
+                        httpOnly: true,
+                        secure: true,
+                        sameSite: 'lax',
+                        domain: cookieDomain || undefined,
+                        maxAge: 30 * 24 * 60 * 60 * 1000,
+                        path: '/',
+                    });
+                }
                 res.json({
                     access_token: tokens.access_token,
                     expires_in: tokens.expires_in,
@@ -203,12 +209,18 @@ export function createAuthMiddleware(config) {
                     res.status(tokenRes.status).json(await tokenRes.json());
                     return;
                 }
-                // Forward Set-Cookie headers from auth service
-                const setCookies = tokenRes.headers.getSetCookie?.() || [];
-                for (const cookie of setCookies) {
-                    res.append('Set-Cookie', cookie);
-                }
                 const tokens = (await tokenRes.json());
+                // Set rotated refresh token cookie
+                if (tokens.refresh_token) {
+                    res.cookie('refresh_token', tokens.refresh_token, {
+                        httpOnly: true,
+                        secure: true,
+                        sameSite: 'lax',
+                        domain: cookieDomain || undefined,
+                        maxAge: 30 * 24 * 60 * 60 * 1000,
+                        path: '/',
+                    });
+                }
                 res.json({
                     access_token: tokens.access_token,
                     expires_in: tokens.expires_in,
@@ -239,12 +251,22 @@ export function createAuthMiddleware(config) {
                     res.status(tokenRes.status).json(await tokenRes.json());
                     return;
                 }
-                // Forward Set-Cookie headers
-                const setCookies = tokenRes.headers.getSetCookie?.() || [];
-                for (const cookie of setCookies) {
-                    res.append('Set-Cookie', cookie);
+                const tokens = (await tokenRes.json());
+                // Set rotated refresh token cookie
+                if (tokens.refresh_token) {
+                    res.cookie('refresh_token', tokens.refresh_token, {
+                        httpOnly: true,
+                        secure: true,
+                        sameSite: 'lax',
+                        domain: cookieDomain || undefined,
+                        maxAge: 30 * 24 * 60 * 60 * 1000,
+                        path: '/',
+                    });
                 }
-                res.json(await tokenRes.json());
+                res.json({
+                    access_token: tokens.access_token,
+                    expires_in: tokens.expires_in,
+                });
             }
             catch {
                 res.status(500).json({ error: 'Organization switch failed' });
@@ -258,18 +280,21 @@ export function createAuthMiddleware(config) {
     function logoutProxy() {
         return async (req, res) => {
             try {
-                const logoutRes = await fetch(`${authUrl}/api/logout`, {
+                await fetch(`${authUrl}/api/logout`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         Cookie: req.headers.cookie || '',
                     },
                 });
-                // Forward Set-Cookie headers (clears cookie)
-                const setCookies = logoutRes.headers.getSetCookie?.() || [];
-                for (const cookie of setCookies) {
-                    res.append('Set-Cookie', cookie);
-                }
+                // Clear refresh token cookie
+                res.clearCookie('refresh_token', {
+                    httpOnly: true,
+                    secure: true,
+                    sameSite: 'lax',
+                    domain: cookieDomain || undefined,
+                    path: '/',
+                });
                 res.json({ ok: true });
             }
             catch {

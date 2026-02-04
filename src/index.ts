@@ -237,17 +237,24 @@ export function createAuthMiddleware(config: AuthConfig) {
           return;
         }
 
-        // Forward Set-Cookie headers (refresh token) from auth service
-        const setCookies = tokenRes.headers.getSetCookie?.() || [];
-        for (const cookie of setCookies) {
-          res.append('Set-Cookie', cookie);
-        }
-
         const tokens = (await tokenRes.json()) as {
           access_token: string;
           token_type: string;
           expires_in: number;
+          refresh_token?: string;
         };
+
+        // Set refresh token as httpOnly cookie on the shared domain
+        if (tokens.refresh_token) {
+          res.cookie('refresh_token', tokens.refresh_token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+            domain: cookieDomain || undefined,
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            path: '/',
+          });
+        }
 
         res.json({
           access_token: tokens.access_token,
@@ -280,16 +287,23 @@ export function createAuthMiddleware(config: AuthConfig) {
           return;
         }
 
-        // Forward Set-Cookie headers from auth service
-        const setCookies = tokenRes.headers.getSetCookie?.() || [];
-        for (const cookie of setCookies) {
-          res.append('Set-Cookie', cookie);
-        }
-
         const tokens = (await tokenRes.json()) as {
           access_token: string;
           expires_in: number;
+          refresh_token?: string;
         };
+
+        // Set rotated refresh token cookie
+        if (tokens.refresh_token) {
+          res.cookie('refresh_token', tokens.refresh_token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+            domain: cookieDomain || undefined,
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            path: '/',
+          });
+        }
 
         res.json({
           access_token: tokens.access_token,
@@ -324,13 +338,28 @@ export function createAuthMiddleware(config: AuthConfig) {
           return;
         }
 
-        // Forward Set-Cookie headers
-        const setCookies = tokenRes.headers.getSetCookie?.() || [];
-        for (const cookie of setCookies) {
-          res.append('Set-Cookie', cookie);
+        const tokens = (await tokenRes.json()) as {
+          access_token: string;
+          expires_in: number;
+          refresh_token?: string;
+        };
+
+        // Set rotated refresh token cookie
+        if (tokens.refresh_token) {
+          res.cookie('refresh_token', tokens.refresh_token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: 'lax',
+            domain: cookieDomain || undefined,
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            path: '/',
+          });
         }
 
-        res.json(await tokenRes.json());
+        res.json({
+          access_token: tokens.access_token,
+          expires_in: tokens.expires_in,
+        });
       } catch {
         res.status(500).json({ error: 'Organization switch failed' });
       }
@@ -344,7 +373,7 @@ export function createAuthMiddleware(config: AuthConfig) {
   function logoutProxy(): RequestHandler {
     return async (req: Request, res: Response) => {
       try {
-        const logoutRes = await fetch(`${authUrl}/api/logout`, {
+        await fetch(`${authUrl}/api/logout`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -352,11 +381,14 @@ export function createAuthMiddleware(config: AuthConfig) {
           },
         });
 
-        // Forward Set-Cookie headers (clears cookie)
-        const setCookies = logoutRes.headers.getSetCookie?.() || [];
-        for (const cookie of setCookies) {
-          res.append('Set-Cookie', cookie);
-        }
+        // Clear refresh token cookie
+        res.clearCookie('refresh_token', {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'lax',
+          domain: cookieDomain || undefined,
+          path: '/',
+        });
 
         res.json({ ok: true });
       } catch {
