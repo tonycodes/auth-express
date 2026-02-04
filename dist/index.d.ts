@@ -8,6 +8,8 @@ export interface AuthConfig {
     clientSecret: string;
     /** Cookie domain for refresh tokens (e.g., ".tony.codes") */
     cookieDomain?: string;
+    /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
+    appUrl?: string;
 }
 export interface AuthUser {
     userId: string;

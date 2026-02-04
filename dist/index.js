@@ -27,7 +27,7 @@ async function verifyToken(token, authUrl) {
 }
 // ─── Middleware Factory ──────────────────────────────────────────────────
 export function createAuthMiddleware(config) {
-    const { authUrl, clientId, clientSecret, cookieDomain } = config;
+    const { authUrl, clientId, clientSecret, cookieDomain, appUrl } = config;
     /**
      * Base middleware — verifies JWT if present, attaches req.auth
      * Does NOT reject unauthenticated requests
@@ -149,7 +149,9 @@ export function createAuthMiddleware(config) {
                 return;
             }
             try {
-                const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
+                const redirectUri = appUrl
+                    ? `${appUrl}/auth/callback`
+                    : `${req.protocol}://${req.get('host')}/auth/callback`;
                 const tokenRes = await fetch(`${authUrl}/api/token`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

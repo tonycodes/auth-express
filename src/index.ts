@@ -12,6 +12,8 @@ export interface AuthConfig {
   clientSecret: string;
   /** Cookie domain for refresh tokens (e.g., ".tony.codes") */
   cookieDomain?: string;
+  /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
+  appUrl?: string;
 }
 
 export interface AuthUser {
@@ -75,7 +77,7 @@ async function verifyToken(token: string, authUrl: string): Promise<jose.JWTPayl
 // ─── Middleware Factory ──────────────────────────────────────────────────
 
 export function createAuthMiddleware(config: AuthConfig) {
-  const { authUrl, clientId, clientSecret, cookieDomain } = config;
+  const { authUrl, clientId, clientSecret, cookieDomain, appUrl } = config;
 
   /**
    * Base middleware — verifies JWT if present, attaches req.auth
@@ -213,7 +215,9 @@ export function createAuthMiddleware(config: AuthConfig) {
       }
 
       try {
-        const redirectUri = `${req.protocol}://${req.get('host')}/auth/callback`;
+        const redirectUri = appUrl
+          ? `${appUrl}/auth/callback`
+          : `${req.protocol}://${req.get('host')}/auth/callback`;
 
         const tokenRes = await fetch(`${authUrl}/api/token`, {
           method: 'POST',
