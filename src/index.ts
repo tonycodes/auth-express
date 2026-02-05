@@ -8,12 +8,48 @@ export interface AuthConfig {
   authUrl: string;
   /** Client ID for this app (e.g., "rag-platform") */
   clientId: string;
-  /** Client secret for token exchange */
+  /** Client secret for token exchange (plaintext, NOT the hash) */
   clientSecret: string;
-  /** Cookie domain for refresh tokens (e.g., ".tony.codes") */
+  /**
+   * Cookie domain for refresh tokens.
+   * If not specified, auto-derived from request hostname:
+   * - *.tony.codes → .tony.codes (shared SSO)
+   * - myapp.test → .myapp.test
+   * - api.myapp.test → .myapp.test
+   */
   cookieDomain?: string;
   /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
   appUrl?: string;
+}
+
+// ─── Cookie Domain Helper ─────────────────────────────────────────────────
+
+/**
+ * Derive cookie domain from hostname if not explicitly configured.
+ * - Production: *.tony.codes → .tony.codes (shared SSO)
+ * - Local: myapp.test → .myapp.test (isolated per app)
+ * - Subdomains: api.myapp.test → .myapp.test
+ */
+function deriveCookieDomain(hostname: string): string | undefined {
+  // Production: use shared .tony.codes domain
+  if (hostname.endsWith('.tony.codes') || hostname === 'tony.codes') {
+    return '.tony.codes';
+  }
+
+  // Local .test domains: derive app-specific domain
+  if (hostname.endsWith('.test')) {
+    const parts = hostname.split('.');
+    // myapp.test → .myapp.test
+    // api.myapp.test → .myapp.test
+    if (parts.length >= 2) {
+      // Get the last two parts before .test (or just the app name)
+      const appPart = parts.length === 2 ? parts[0] : parts[parts.length - 2];
+      return `.${appPart}.test`;
+    }
+  }
+
+  // Unknown domain structure — don't set domain (browser default)
+  return undefined;
 }
 
 export interface AuthUser {
@@ -77,7 +113,17 @@ async function verifyToken(token: string, authUrl: string): Promise<jose.JWTPayl
 // ─── Middleware Factory ──────────────────────────────────────────────────
 
 export function createAuthMiddleware(config: AuthConfig) {
-  const { authUrl, clientId, clientSecret, cookieDomain, appUrl } = config;
+  const { authUrl, clientId, clientSecret, cookieDomain: configuredDomain, appUrl } = config;
+
+  /**
+   * Get the effective cookie domain for a request.
+   * Uses configured domain if provided, otherwise derives from hostname.
+   */
+  function getCookieDomain(req: Request): string | undefined {
+    if (configuredDomain) return configuredDomain;
+    const hostname = req.get('host')?.split(':')[0]; // Remove port if present
+    return hostname ? deriveCookieDomain(hostname) : undefined;
+  }
 
   /**
    * Base middleware — verifies JWT if present, attaches req.auth
@@ -244,13 +290,13 @@ export function createAuthMiddleware(config: AuthConfig) {
           refresh_token?: string;
         };
 
-        // Set refresh token as httpOnly cookie on the shared domain
+        // Set refresh token as httpOnly cookie on the derived/configured domain
         if (tokens.refresh_token) {
           res.cookie('refresh_token', tokens.refresh_token, {
             httpOnly: true,
             secure: true,
             sameSite: 'lax',
-            domain: cookieDomain || undefined,
+            domain: getCookieDomain(req),
             maxAge: 30 * 24 * 60 * 60 * 1000,
             path: '/',
           });
@@ -299,7 +345,7 @@ export function createAuthMiddleware(config: AuthConfig) {
             httpOnly: true,
             secure: true,
             sameSite: 'lax',
-            domain: cookieDomain || undefined,
+            domain: getCookieDomain(req),
             maxAge: 30 * 24 * 60 * 60 * 1000,
             path: '/',
           });
@@ -350,7 +396,7 @@ export function createAuthMiddleware(config: AuthConfig) {
             httpOnly: true,
             secure: true,
             sameSite: 'lax',
-            domain: cookieDomain || undefined,
+            domain: getCookieDomain(req),
             maxAge: 30 * 24 * 60 * 60 * 1000,
             path: '/',
           });
@@ -386,7 +432,7 @@ export function createAuthMiddleware(config: AuthConfig) {
           httpOnly: true,
           secure: true,
           sameSite: 'lax',
-          domain: cookieDomain || undefined,
+          domain: getCookieDomain(req),
           path: '/',
         });
 

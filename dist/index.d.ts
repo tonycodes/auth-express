@@ -4,9 +4,15 @@ export interface AuthConfig {
     authUrl: string;
     /** Client ID for this app (e.g., "rag-platform") */
     clientId: string;
-    /** Client secret for token exchange */
+    /** Client secret for token exchange (plaintext, NOT the hash) */
     clientSecret: string;
-    /** Cookie domain for refresh tokens (e.g., ".tony.codes") */
+    /**
+     * Cookie domain for refresh tokens.
+     * If not specified, auto-derived from request hostname:
+     * - *.tony.codes → .tony.codes (shared SSO)
+     * - myapp.test → .myapp.test
+     * - api.myapp.test → .myapp.test
+     */
     cookieDomain?: string;
     /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
     appUrl?: string;

@@ -1,4 +1,30 @@
 import * as jose from 'jose';
+// ─── Cookie Domain Helper ─────────────────────────────────────────────────
+/**
+ * Derive cookie domain from hostname if not explicitly configured.
+ * - Production: *.tony.codes → .tony.codes (shared SSO)
+ * - Local: myapp.test → .myapp.test (isolated per app)
+ * - Subdomains: api.myapp.test → .myapp.test
+ */
+function deriveCookieDomain(hostname) {
+    // Production: use shared .tony.codes domain
+    if (hostname.endsWith('.tony.codes') || hostname === 'tony.codes') {
+        return '.tony.codes';
+    }
+    // Local .test domains: derive app-specific domain
+    if (hostname.endsWith('.test')) {
+        const parts = hostname.split('.');
+        // myapp.test → .myapp.test
+        // api.myapp.test → .myapp.test
+        if (parts.length >= 2) {
+            // Get the last two parts before .test (or just the app name)
+            const appPart = parts.length === 2 ? parts[0] : parts[parts.length - 2];
+            return `.${appPart}.test`;
+        }
+    }
+    // Unknown domain structure — don't set domain (browser default)
+    return undefined;
+}
 // ─── JWKS Cache ──────────────────────────────────────────────────────────
 let jwksCache = null;
 let jwksCacheExpiry = 0;
@@ -27,7 +53,17 @@ async function verifyToken(token, authUrl) {
 }
 // ─── Middleware Factory ──────────────────────────────────────────────────
 export function createAuthMiddleware(config) {
-    const { authUrl, clientId, clientSecret, cookieDomain, appUrl } = config;
+    const { authUrl, clientId, clientSecret, cookieDomain: configuredDomain, appUrl } = config;
+    /**
+     * Get the effective cookie domain for a request.
+     * Uses configured domain if provided, otherwise derives from hostname.
+     */
+    function getCookieDomain(req) {
+        if (configuredDomain)
+            return configuredDomain;
+        const hostname = req.get('host')?.split(':')[0]; // Remove port if present
+        return hostname ? deriveCookieDomain(hostname) : undefined;
+    }
     /**
      * Base middleware — verifies JWT if present, attaches req.auth
      * Does NOT reject unauthenticated requests
@@ -169,13 +205,13 @@ export function createAuthMiddleware(config) {
                     return;
                 }
                 const tokens = (await tokenRes.json());
-                // Set refresh token as httpOnly cookie on the shared domain
+                // Set refresh token as httpOnly cookie on the derived/configured domain
                 if (tokens.refresh_token) {
                     res.cookie('refresh_token', tokens.refresh_token, {
                         httpOnly: true,
                         secure: true,
                         sameSite: 'lax',
-                        domain: cookieDomain || undefined,
+                        domain: getCookieDomain(req),
                         maxAge: 30 * 24 * 60 * 60 * 1000,
                         path: '/',
                     });
@@ -216,7 +252,7 @@ export function createAuthMiddleware(config) {
                         httpOnly: true,
                         secure: true,
                         sameSite: 'lax',
-                        domain: cookieDomain || undefined,
+                        domain: getCookieDomain(req),
                         maxAge: 30 * 24 * 60 * 60 * 1000,
                         path: '/',
                     });
@@ -258,7 +294,7 @@ export function createAuthMiddleware(config) {
                         httpOnly: true,
                         secure: true,
                         sameSite: 'lax',
-                        domain: cookieDomain || undefined,
+                        domain: getCookieDomain(req),
                         maxAge: 30 * 24 * 60 * 60 * 1000,
                         path: '/',
                     });
@@ -292,7 +328,7 @@ export function createAuthMiddleware(config) {
                     httpOnly: true,
                     secure: true,
                     sameSite: 'lax',
-                    domain: cookieDomain || undefined,
+                    domain: getCookieDomain(req),
                     path: '/',
                 });
                 res.json({ ok: true });
