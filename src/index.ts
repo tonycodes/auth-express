@@ -1,15 +1,16 @@
+import { Router } from 'express';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import * as jose from 'jose';
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
 export interface AuthConfig {
-  /** Auth service URL (e.g., https://auth.tony.codes) */
-  authUrl: string;
   /** Client ID for this app (e.g., "rag-platform") */
   clientId: string;
   /** Client secret for token exchange (plaintext, NOT the hash) */
   clientSecret: string;
+  /** Auth service URL. Defaults to https://auth.tony.codes */
+  authUrl?: string;
   /**
    * Cookie domain for refresh tokens.
    * If not specified, auto-derived from request hostname:
@@ -113,7 +114,13 @@ async function verifyToken(token: string, authUrl: string): Promise<jose.JWTPayl
 // ─── Middleware Factory ──────────────────────────────────────────────────
 
 export function createAuthMiddleware(config: AuthConfig) {
-  const { authUrl, clientId, clientSecret, cookieDomain: configuredDomain, appUrl } = config;
+  const {
+    authUrl = 'https://auth.tony.codes',
+    clientId,
+    clientSecret,
+    cookieDomain: configuredDomain,
+    appUrl,
+  } = config;
 
   /**
    * Get the effective cookie domain for a request.
@@ -249,7 +256,7 @@ export function createAuthMiddleware(config: AuthConfig) {
 
   /**
    * Handle auth callback — exchanges authorization code for tokens
-   * Mount at GET /auth/callback
+   * Mount at GET /api/auth/callback (not /auth/callback, which is for SPA routing)
    */
   function callbackHandler(): RequestHandler {
     return async (req: Request, res: Response) => {
@@ -443,6 +450,20 @@ export function createAuthMiddleware(config: AuthConfig) {
     };
   }
 
+  /**
+   * Returns an Express Router with all auth proxy routes pre-mounted.
+   * Replaces the need to mount each handler individually:
+   *   app.use(auth.routes())
+   */
+  function routes(): Router {
+    const router = Router();
+    router.get('/api/auth/callback', callbackHandler());
+    router.post('/auth/refresh', refreshProxy());
+    router.post('/auth/switch-org', switchOrgProxy());
+    router.post('/auth/logout', logoutProxy());
+    return router;
+  }
+
   return {
     middleware,
     requireOrg,
@@ -453,6 +474,111 @@ export function createAuthMiddleware(config: AuthConfig) {
     refreshProxy,
     switchOrgProxy,
     logoutProxy,
+    routes,
     config: { authUrl, clientId },
+  };
+}
+
+// ─── Standalone Callback Handler ──────────────────────────────────────────
+
+interface CallbackPageConfig {
+  /** Client ID for token exchange */
+  clientId: string;
+  /** Client secret for token exchange */
+  clientSecret: string;
+  /** Auth service URL. Defaults to https://auth.tony.codes */
+  authUrl?: string;
+}
+
+/**
+ * Standalone callback handler for hosted login page mode.
+ * Exchanges the authorization code for tokens, sets cookies, and redirects.
+ *
+ * Use this when you don't need the full SDK — just redirect to /authorize
+ * and mount this single route:
+ *
+ *   app.get('/auth/callback', createCallbackPage({
+ *     clientId: 'my-app',
+ *     clientSecret: process.env.AUTH_SECRET!,
+ *   }));
+ */
+export function createCallbackPage(config: CallbackPageConfig): RequestHandler {
+  const { clientId, clientSecret, authUrl = 'https://auth.tony.codes' } = config;
+
+  return async (req: Request, res: Response) => {
+    const { code, state } = req.query;
+
+    if (!code || typeof code !== 'string') {
+      res.status(400).send('Missing authorization code');
+      return;
+    }
+
+    // Derive redirect_uri from the current request URL
+    const redirectUri = `${req.protocol}://${req.get('host')}${req.path}`;
+
+    try {
+      const tokenRes = await fetch(`${authUrl}/api/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+        }),
+      });
+
+      if (!tokenRes.ok) {
+        res.status(401).send('Authentication failed');
+        return;
+      }
+
+      const tokens = (await tokenRes.json()) as {
+        access_token: string;
+        expires_in: number;
+        refresh_token?: string;
+      };
+
+      // Set refresh token as httpOnly cookie
+      if (tokens.refresh_token) {
+        const hostname = req.get('host')?.split(':')[0];
+        const cookieDomain = hostname ? deriveCookieDomain(hostname) : undefined;
+
+        res.cookie('refresh_token', tokens.refresh_token, {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'lax',
+          domain: cookieDomain,
+          maxAge: 30 * 24 * 60 * 60 * 1000,
+          path: '/',
+        });
+      }
+
+      // Set access token as a short-lived cookie for the app to read
+      res.cookie('access_token', tokens.access_token, {
+        secure: true,
+        sameSite: 'lax',
+        maxAge: tokens.expires_in * 1000,
+        path: '/',
+      });
+
+      // Parse returnTo from state, or default to /
+      let returnTo = '/';
+      if (state && typeof state === 'string') {
+        try {
+          const parsed = JSON.parse(atob(state));
+          if (parsed.returnTo && typeof parsed.returnTo === 'string') {
+            returnTo = parsed.returnTo;
+          }
+        } catch {
+          // Invalid state — ignore
+        }
+      }
+
+      res.redirect(returnTo);
+    } catch {
+      res.status(500).send('Authentication failed');
+    }
   };
 }
