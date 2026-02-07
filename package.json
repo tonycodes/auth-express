@@ -1,6 +1,6 @@
 {
   "name": "@tonycodes/auth-express",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Express middleware for Tony Auth service",
   "type": "module",
   "main": "dist/index.js",
@@ -11,9 +11,33 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "express",
+    "auth",
+    "authentication",
+    "middleware",
+    "sdk"
+  ],
+  "author": "Tony <tony@tony.codes>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tonycodes/auth-express.git"
+  },
+  "homepage": "https://github.com/tonycodes/auth-express#readme",
+  "bugs": {
+    "url": "https://github.com/tonycodes/auth-express/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "jose": "^6.0.11"
