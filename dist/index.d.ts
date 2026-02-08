@@ -1,11 +1,12 @@
+import { Router } from 'express';
 import type { RequestHandler } from 'express';
 export interface AuthConfig {
-    /** Auth service URL (e.g., https://auth.tony.codes) */
-    authUrl: string;
     /** Client ID for this app (e.g., "rag-platform") */
     clientId: string;
     /** Client secret for token exchange (plaintext, NOT the hash) */
     clientSecret: string;
+    /** Auth service URL. Defaults to https://auth.tony.codes */
+    authUrl?: string;
     /**
      * Cookie domain for refresh tokens.
      * If not specified, auto-derived from request hostname:
@@ -50,9 +51,32 @@ export declare function createAuthMiddleware(config: AuthConfig): {
     refreshProxy: () => RequestHandler;
     switchOrgProxy: () => RequestHandler;
     logoutProxy: () => RequestHandler;
+    routes: () => Router;
     config: {
         authUrl: string;
         clientId: string;
     };
 };
+interface CallbackPageConfig {
+    /** Client ID for token exchange */
+    clientId: string;
+    /** Client secret for token exchange */
+    clientSecret: string;
+    /** Auth service URL. Defaults to https://auth.tony.codes */
+    authUrl?: string;
+}
+/**
+ * Standalone callback handler for hosted login page mode.
+ * Exchanges the authorization code for tokens, sets cookies, and redirects.
+ *
+ * Use this when you don't need the full SDK — just redirect to /authorize
+ * and mount this single route:
+ *
+ *   app.get('/auth/callback', createCallbackPage({
+ *     clientId: 'my-app',
+ *     clientSecret: process.env.AUTH_SECRET!,
+ *   }));
+ */
+export declare function createCallbackPage(config: CallbackPageConfig): RequestHandler;
+export {};
 //# sourceMappingURL=index.d.ts.map
