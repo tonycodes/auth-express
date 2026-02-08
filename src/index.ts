@@ -114,6 +114,19 @@ async function verifyToken(token: string, authUrl: string): Promise<jose.JWTPayl
 // ─── Middleware Factory ──────────────────────────────────────────────────
 
 export function createAuthMiddleware(config: AuthConfig) {
+  if (!config.clientId) {
+    throw new Error(
+      '[@tonycodes/auth-express] Missing required config: clientId. ' +
+        'This is the client ID registered with the auth service.',
+    );
+  }
+  if (!config.clientSecret) {
+    throw new Error(
+      '[@tonycodes/auth-express] Missing required config: clientSecret. ' +
+        'This is the plaintext client secret for token exchange.',
+    );
+  }
+
   const {
     authUrl = 'https://auth.tony.codes',
     clientId,
