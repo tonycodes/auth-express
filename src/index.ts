@@ -21,6 +21,28 @@ export interface AuthConfig {
   cookieDomain?: string;
   /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
   appUrl?: string;
+  /** Suppress all SDK logging. Defaults to false. */
+  silent?: boolean;
+}
+
+// ─── SDK Logger ──────────────────────────────────────────────────────────
+
+const PREFIX = '[@tonycodes/auth-express]';
+const noop = () => {};
+
+interface SDKLogger {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+}
+
+function createSDKLogger(silent: boolean): SDKLogger {
+  if (silent) return { info: noop, warn: noop, error: noop };
+  return {
+    info: (...args: unknown[]) => console.log(PREFIX, ...args),
+    warn: (...args: unknown[]) => console.warn(PREFIX, ...args),
+    error: (...args: unknown[]) => console.error(PREFIX, ...args),
+  };
 }
 
 // ─── Cookie Domain Helper ─────────────────────────────────────────────────
@@ -84,14 +106,17 @@ declare global {
 let jwksCache: jose.JSONWebKeySet | null = null;
 let jwksCacheExpiry = 0;
 const JWKS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const FETCH_TIMEOUT_MS = 10_000; // 10 seconds
 
-async function getJWKS(authUrl: string): Promise<jose.JSONWebKeySet> {
+async function getJWKS(authUrl: string, log: SDKLogger): Promise<jose.JSONWebKeySet> {
   const now = Date.now();
   if (jwksCache && now < jwksCacheExpiry) {
     return jwksCache;
   }
 
-  const res = await fetch(`${authUrl}/.well-known/jwks.json`);
+  const res = await fetch(`${authUrl}/.well-known/jwks.json`, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch JWKS: ${res.status}`);
   }
@@ -101,8 +126,8 @@ async function getJWKS(authUrl: string): Promise<jose.JSONWebKeySet> {
   return jwksCache;
 }
 
-async function verifyToken(token: string, authUrl: string): Promise<jose.JWTPayload> {
-  const jwks = await getJWKS(authUrl);
+async function verifyToken(token: string, authUrl: string, log: SDKLogger): Promise<jose.JWTPayload> {
+  const jwks = await getJWKS(authUrl, log);
   const JWKS = jose.createLocalJWKSet(jwks);
   const { payload } = await jose.jwtVerify(token, JWKS, {
     issuer: 'auth.tony.codes',
@@ -133,7 +158,10 @@ export function createAuthMiddleware(config: AuthConfig) {
     clientSecret,
     cookieDomain: configuredDomain,
     appUrl,
+    silent = false,
   } = config;
+
+  const log = createSDKLogger(silent);
 
   /**
    * Get the effective cookie domain for a request.
@@ -158,7 +186,7 @@ export function createAuthMiddleware(config: AuthConfig) {
 
       const token = authHeader.substring(7);
       try {
-        const payload = await verifyToken(token, authUrl);
+        const payload = await verifyToken(token, authUrl, log);
         const org = payload.org as { id: string; name: string; slug: string; role: string } | null;
 
         req.auth = {
@@ -172,8 +200,12 @@ export function createAuthMiddleware(config: AuthConfig) {
           orgRole: org?.role || null,
           isSuperAdmin: (payload.isSuperAdmin as boolean) || false,
         };
-      } catch {
-        // Invalid token — continue without auth
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes('fetch') || msg.includes('JWKS') || msg.includes('abort')) {
+          log.error(`JWKS fetch failed — cannot verify tokens. Is auth service at ${authUrl} reachable? Error: ${msg}`);
+        }
+        // Invalid or unverifiable token — continue without auth
       }
       next();
     };
@@ -288,6 +320,7 @@ export function createAuthMiddleware(config: AuthConfig) {
         const tokenRes = await fetch(`${authUrl}/api/token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           body: JSON.stringify({
             grant_type: 'authorization_code',
             code,
@@ -298,8 +331,15 @@ export function createAuthMiddleware(config: AuthConfig) {
         });
 
         if (!tokenRes.ok) {
-          const err = (await tokenRes.json()) as { error: string };
-          res.status(401).json({ error: err.error || 'Token exchange failed' });
+          const err = (await tokenRes.json()) as { error: string; code?: string };
+          log.error(`Token exchange failed: ${err.code || 'UNKNOWN'} — ${err.error} (HTTP ${tokenRes.status})`);
+          if (err.code === 'INVALID_CLIENT_SECRET') {
+            log.error('Check that AUTH_SECRET matches the client secret stored in the auth service.');
+          }
+          if (err.code === 'INVALID_CLIENT_ID') {
+            log.error(`Client ID "${clientId}" is not registered with the auth service.`);
+          }
+          res.status(tokenRes.status).json({ error: err.error, code: err.code });
           return;
         }
 
@@ -327,7 +367,8 @@ export function createAuthMiddleware(config: AuthConfig) {
           expires_in: tokens.expires_in,
         });
       } catch (err) {
-        res.status(500).json({ error: 'Token exchange failed' });
+        log.error(`Cannot reach auth service at ${authUrl}: ${(err as Error).message}`);
+        res.status(502).json({ error: 'Auth service unavailable' });
       }
     };
   }
@@ -345,10 +386,15 @@ export function createAuthMiddleware(config: AuthConfig) {
             'Content-Type': 'application/json',
             Cookie: req.headers.cookie || '',
           },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           body: JSON.stringify({ grant_type: 'refresh_token' }),
         });
 
         if (!tokenRes.ok) {
+          // 401 is normal session expiry — only log unexpected failures
+          if (tokenRes.status !== 401) {
+            log.warn(`Token refresh failed with HTTP ${tokenRes.status}`);
+          }
           res.status(tokenRes.status).json(await tokenRes.json());
           return;
         }
@@ -375,8 +421,9 @@ export function createAuthMiddleware(config: AuthConfig) {
           access_token: tokens.access_token,
           expires_in: tokens.expires_in,
         });
-      } catch {
-        res.status(500).json({ error: 'Refresh failed' });
+      } catch (err) {
+        log.error(`Cannot reach auth service at ${authUrl}: ${(err as Error).message}`);
+        res.status(502).json({ error: 'Auth service unavailable' });
       }
     };
   }
@@ -396,6 +443,7 @@ export function createAuthMiddleware(config: AuthConfig) {
             'Content-Type': 'application/json',
             Cookie: req.headers.cookie || '',
           },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           body: JSON.stringify({ grant_type: 'switch_organization', org_id }),
         });
 
@@ -426,8 +474,9 @@ export function createAuthMiddleware(config: AuthConfig) {
           access_token: tokens.access_token,
           expires_in: tokens.expires_in,
         });
-      } catch {
-        res.status(500).json({ error: 'Organization switch failed' });
+      } catch (err) {
+        log.error(`Cannot reach auth service at ${authUrl}: ${(err as Error).message}`);
+        res.status(502).json({ error: 'Auth service unavailable' });
       }
     };
   }
@@ -445,6 +494,7 @@ export function createAuthMiddleware(config: AuthConfig) {
             'Content-Type': 'application/json',
             Cookie: req.headers.cookie || '',
           },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
 
         // Clear refresh token cookie
@@ -457,8 +507,17 @@ export function createAuthMiddleware(config: AuthConfig) {
         });
 
         res.json({ ok: true });
-      } catch {
-        res.status(500).json({ error: 'Logout failed' });
+      } catch (err) {
+        log.error(`Cannot reach auth service at ${authUrl}: ${(err as Error).message}`);
+        // Still clear the cookie locally even if the auth service is unreachable
+        res.clearCookie('refresh_token', {
+          httpOnly: true,
+          secure: true,
+          sameSite: 'lax',
+          domain: getCookieDomain(req),
+          path: '/',
+        });
+        res.status(502).json({ error: 'Auth service unavailable' });
       }
     };
   }
@@ -476,6 +535,25 @@ export function createAuthMiddleware(config: AuthConfig) {
     router.post('/auth/logout', logoutProxy());
     return router;
   }
+
+  // Fire-and-forget startup validation (non-blocking)
+  setImmediate(async () => {
+    try {
+      const res = await fetch(`${authUrl}/api/client-apps/${clientId}/config`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status === 404) {
+        log.error(`Client ID "${clientId}" not found on auth service at ${authUrl}. Check your clientId config.`);
+      } else if (!res.ok) {
+        log.warn(`Auth service health check returned ${res.status}. URL: ${authUrl}`);
+      } else {
+        log.info(`Connected to auth service at ${authUrl} (client: ${clientId})`);
+        log.info('Note: Client secret validity is only verified during token exchange.');
+      }
+    } catch (err) {
+      log.error(`Cannot reach auth service at ${authUrl}. Is AUTH_URL correct? Error: ${(err as Error).message}`);
+    }
+  });
 
   return {
     middleware,
