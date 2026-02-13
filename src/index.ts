@@ -85,6 +85,7 @@ export interface AuthUser {
   orgSlug: string | null;
   orgRole: string | null;
   isSuperAdmin: boolean;
+  appRole: string | null;
 }
 
 // Extend Express Request
@@ -199,6 +200,7 @@ export function createAuthMiddleware(config: AuthConfig) {
           orgSlug: org?.slug || null,
           orgRole: org?.role || null,
           isSuperAdmin: (payload.isSuperAdmin as boolean) || false,
+          appRole: (payload.appRole as string) || null,
         };
       } catch (err) {
         const msg = (err as Error).message;
@@ -275,6 +277,24 @@ export function createAuthMiddleware(config: AuthConfig) {
 
       if (!req.auth?.orgRole || !roles.includes(req.auth.orgRole)) {
         res.status(403).json({ error: `Requires role: ${roles.join(' or ')}` });
+        return;
+      }
+
+      next();
+    };
+  }
+
+  /**
+   * Require specific app-level role (from AppMembership).
+   * Super admins and API key auth bypass this check.
+   */
+  function requireAppRole(...roles: string[]): RequestHandler {
+    return (req: Request, res: Response, next: NextFunction) => {
+      if (req.auth?.isSuperAdmin) return next();
+      if (req.apiKey) return next();
+
+      if (!req.auth?.appRole || !roles.includes(req.auth.appRole)) {
+        res.status(403).json({ error: `Requires app role: ${roles.join(' or ')}` });
         return;
       }
 
@@ -560,6 +580,7 @@ export function createAuthMiddleware(config: AuthConfig) {
     requireOrg,
     requireSuperAdmin,
     requireOrgRole,
+    requireAppRole,
     requireScope,
     callbackHandler,
     refreshProxy,

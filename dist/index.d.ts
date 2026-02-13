@@ -17,6 +17,8 @@ export interface AuthConfig {
     cookieDomain?: string;
     /** Frontend app URL — required when API and frontend are on different hosts (e.g., api.autopilot.test vs autopilot.test) */
     appUrl?: string;
+    /** Suppress all SDK logging. Defaults to false. */
+    silent?: boolean;
 }
 export interface AuthUser {
     userId: string;
@@ -28,6 +30,7 @@ export interface AuthUser {
     orgSlug: string | null;
     orgRole: string | null;
     isSuperAdmin: boolean;
+    appRole: string | null;
 }
 declare global {
     namespace Express {
@@ -46,6 +49,7 @@ export declare function createAuthMiddleware(config: AuthConfig): {
     requireOrg: () => RequestHandler;
     requireSuperAdmin: () => RequestHandler;
     requireOrgRole: (...roles: string[]) => RequestHandler;
+    requireAppRole: (...roles: string[]) => RequestHandler;
     requireScope: (...scopes: string[]) => RequestHandler;
     callbackHandler: () => RequestHandler;
     refreshProxy: () => RequestHandler;
