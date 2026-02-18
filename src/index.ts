@@ -575,6 +575,89 @@ export function createAuthMiddleware(config: AuthConfig) {
     }
   });
 
+  /**
+   * Returns an Express Router for centralized connection management.
+   * Proxies connection status checks to the auth service using M2M credentials.
+   *
+   *   app.use('/api/connections', auth.connections());
+   *
+   * Routes:
+   *   GET /status — connection status for all providers
+   *   GET /:provider/connect-url — auth service authorize URL for initiating a connection
+   */
+  function connections(options?: {
+    /** Providers to check. Defaults to ['github', 'bitbucket', 'atlassian'] */
+    providers?: string[];
+    /** Path to redirect back to after connecting. Defaults to '/settings?tab=connections' */
+    redirectPath?: string;
+  }): Router {
+    const providers = options?.providers || ['github', 'bitbucket', 'atlassian'];
+    const redirectPath = options?.redirectPath || '/settings?tab=connections';
+    const connRouter = Router();
+
+    connRouter.use(requireOrg());
+
+    // GET /status — check connection status for all providers
+    connRouter.get('/status', async (req: Request, res: Response) => {
+      const orgId = req.auth!.orgId!;
+      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+      const results = await Promise.all(
+        providers.map(async (provider) => {
+          try {
+            const response = await fetch(`${authUrl}/api/connections/token`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Basic ${basicAuth}`,
+                'Content-Type': 'application/json',
+              },
+              signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+              body: JSON.stringify({ org_id: orgId, provider }),
+            });
+
+            if (response.ok) {
+              const data = (await response.json()) as {
+                provider_metadata?: { login?: string; username?: string; displayName?: string };
+              };
+              const pm = data.provider_metadata;
+              const displayName = pm?.login || pm?.username || pm?.displayName;
+              return { provider, connected: true, displayName, status: 'active' };
+            }
+
+            return { provider, connected: false };
+          } catch {
+            return { provider, connected: false };
+          }
+        }),
+      );
+
+      res.json({ connections: results });
+    });
+
+    // GET /:provider/connect-url — build auth service authorize URL
+    connRouter.get('/:provider/connect-url', (req: Request, res: Response) => {
+      const provider = req.params.provider as string;
+      if (!providers.includes(provider)) {
+        res.status(400).json({ error: `Invalid provider. Must be: ${providers.join(', ')}` });
+        return;
+      }
+
+      const orgId = req.auth!.orgId!;
+      const effectiveAppUrl = appUrl || `${req.protocol}://${req.get('host')}`;
+      const redirectUri = `${effectiveAppUrl}${redirectPath}`;
+
+      const url =
+        `${authUrl}/api/connections/${encodeURIComponent(provider)}/authorize` +
+        `?org_id=${encodeURIComponent(orgId)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+        `&client_id=${encodeURIComponent(clientId)}`;
+
+      res.json({ url });
+    });
+
+    return connRouter;
+  }
+
   return {
     middleware,
     requireOrg,
@@ -587,6 +670,7 @@ export function createAuthMiddleware(config: AuthConfig) {
     switchOrgProxy,
     logoutProxy,
     routes,
+    connections,
     config: { authUrl, clientId },
   };
 }

@@ -56,6 +56,12 @@ export declare function createAuthMiddleware(config: AuthConfig): {
     switchOrgProxy: () => RequestHandler;
     logoutProxy: () => RequestHandler;
     routes: () => Router;
+    connections: (options?: {
+        /** Providers to check. Defaults to ['github', 'bitbucket', 'atlassian'] */
+        providers?: string[];
+        /** Path to redirect back to after connecting. Defaults to '/settings?tab=connections' */
+        redirectPath?: string;
+    }) => Router;
     config: {
         authUrl: string;
         clientId: string;
